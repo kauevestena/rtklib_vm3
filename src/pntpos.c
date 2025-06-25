@@ -25,14 +25,13 @@
 *                           add output of velocity estimation error in estvel()
 *-----------------------------------------------------------------------------*/
 #include "rtklib.h"
-
+#include "vmf3_functions.h"
 /* constants/macros ----------------------------------------------------------*/
 
 #define SQR(x)      ((x)*(x))
 #define MAX(x,y)    ((x)>=(y)?(x):(y))
 
-#define QZSDT /* enable GPS-QZS time offset estimation */
-#ifdef QZSDT
+#if 0 /* enable GPS-QZS time offset estimation */
 #define NX          (4+5)       /* # of estimated parameters */
 #else
 #define NX          (4+4)       /* # of estimated parameters */
@@ -214,9 +213,8 @@ extern int ionocorr(gtime_t time, const nav_t *nav, int sat, const double *pos,
 {
     int err=0;
 
-    char tstr[40];
     trace(4,"ionocorr: time=%s opt=%d sat=%2d pos=%.3f %.3f azel=%.3f %.3f\n",
-          time2str(time,tstr,3),ionoopt,sat,pos[0]*R2D,pos[1]*R2D,azel[0]*R2D,
+          time_str(time,3),ionoopt,sat,pos[0]*R2D,pos[1]*R2D,azel[0]*R2D,
           azel[1]*R2D);
     
     /* SBAS ionosphere model */
@@ -259,9 +257,8 @@ extern int ionocorr(gtime_t time, const nav_t *nav, int sat, const double *pos,
 extern int tropcorr(gtime_t time, const nav_t *nav, const double *pos,
                     const double *azel, int tropopt, double *trp, double *var)
 {
-    char tstr[40];
     trace(4,"tropcorr: time=%s opt=%d pos=%.3f %.3f azel=%.3f %.3f\n",
-          time2str(time,tstr,3),tropopt,pos[0]*R2D,pos[1]*R2D,azel[0]*R2D,
+          time_str(time,3),tropopt,pos[0]*R2D,pos[1]*R2D,azel[0]*R2D,
           azel[1]*R2D);
     
     /* Saastamoinen model */
@@ -270,6 +267,108 @@ extern int tropcorr(gtime_t time, const nav_t *nav, const double *pos,
         *var=SQR(ERR_SAAS/(sin(azel[1])+0.1));
         return 1;
     }
+	 // --- INÍCIO DO BLOCO ADICIONADO PARA VMF3/VMF3G ---
+    if (tropopt == TROPOPT_VMF3 || tropopt == TROPOPT_VMF3G) {
+        // --- INÍCIO DAS DECLARAÇÕES (apenas uma vez para cada) ---
+        gtime_t current_time_utc = gpst2utc(time);
+        double lat_deg_station = pos[0] * R2D;
+        double lon_deg_station = pos[1] * R2D;
+        double h_ell_station = pos[2];
+
+        double mfh, mfw;
+        double ah_interp, aw_interp, zhd_interp, zwd_interp;
+        double gn_h_interp, ge_h_interp, gn_w_interp, ge_w_interp;
+        double gradient_contribution_m = 0.0;
+        double mjd_val;
+        double zd_rad = PI / 2.0 - azel[1];
+
+        vmf3_grid_data_t *grid1 = NULL;
+        vmf3_grid_data_t *grid2 = NULL;
+
+        // Variáveis usadas na interpolação temporal (declarar aqui, fora dos if/else aninhados)
+        double ah1, aw1, zhd1, zwd1, gn_h1, ge_h1, gn_w1, ge_w1;
+        double ah2, aw2, zhd2, zwd2, gn_h2, ge_h2, gn_w2, ge_w2;
+        double dt_total, dt_interp, alpha_time;
+
+        // Variáveis do cálculo de gradiente, se não declaradas no topo do arquivo ou função
+        double gn_total_m, ge_total_m; // <--- Certifique-se de que estão aqui se usadas abaixo
+        double az_rad_local = azel[0]; // Renomeada para evitar conflito com 'az_rad' no topo
+        double el_rad_local = azel[1]; // Renomeada
+        double cot_el = 0.0;
+        // --- FIM DAS DECLARAÇÕES ---
+
+        // Obter as grades VMF3 mais próximas no tempo (T1 e T2) do cache
+        if (get_vmf3_data_for_time(current_time_utc, &grid1, &grid2) != 0) {
+            trace(2, "VMF3: Falha ao obter dados da grade VMF3 para interpolação temporal.\n");
+            return 0;
+        }
+
+        // Interpolação temporal: Se T1 e T2 são a mesma grade ou muito próximas
+        if (fabs(timediff(grid1->time, grid2->time)) < 0.1) {
+            if (interpolate_vmf3_grid_coeffs_C(grid1, lat_deg_station, lon_deg_station,
+                                               &ah_interp, &aw_interp, &zhd_interp, &zwd_interp,
+                                               &gn_h_interp, &ge_h_interp, &gn_w_interp, &ge_w_interp) != 0) {
+                trace(2, "VMF3: Falha na interpolação dos coeficientes VMF3 (grade única).\n");
+                return 0;
+            }
+            mjd_val = 51544.5 + timediff(current_time_utc, epoch2time((double[]){2000,1,1,12,0,0})) / 86400.0;
+        } else { // Interpolação temporal entre duas grades VMF3 (T1 e T2)
+            // Remova 'double' das linhas abaixo se já declaradas no topo do bloco
+            // ah1, aw1, zhd1, etc. já devem estar declaradas no topo do bloco
+            if (interpolate_vmf3_grid_coeffs_C(grid1, lat_deg_station, lon_deg_station,
+                                               &ah1, &aw1, &zhd1, &zwd1,
+                                               &gn_h1, &ge_h1, &gn_w1, &ge_w1) != 0) {
+                trace(2, "VMF3: Falha na interpolação dos coeficientes VMF3 (grade T1).\n");
+                return 0;
+            }
+            // ah2, aw2, zhd2, etc. já devem estar declaradas no topo do bloco
+            if (interpolate_vmf3_grid_coeffs_C(grid2, lat_deg_station, lon_deg_station,
+                                               &ah2, &aw2, &zhd2, &zwd2,
+                                               &gn_h2, &ge_h2, &gn_w2, &ge_w2) != 0) {
+                trace(2, "VMF3: Falha na interpolação dos coeficientes VMF3 (grade T2).\n");
+                return 0;
+            }
+            // dt_total, dt_interp, alpha_time já devem estar declaradas no topo do bloco
+            dt_total = timediff(grid2->time, grid1->time);
+            dt_interp = timediff(current_time_utc, grid1->time);
+            alpha_time = (dt_total == 0.0) ? 0.0 : dt_interp / dt_total;
+
+            ah_interp = LERP(ah1, ah2, alpha_time);
+            aw_interp = LERP(aw1, aw2, alpha_time);
+            zhd_interp = LERP(zhd1, zhd2, alpha_time);
+            zwd_interp = LERP(zwd1, zwd2, alpha_time);
+            gn_h_interp = LERP(gn_h1, gn_h2, alpha_time);
+            ge_h_interp = LERP(ge_h1, ge_h2, alpha_time);
+            gn_w_interp = LERP(gn_w1, gn_w2, alpha_time);
+            ge_w_interp = LERP(ge_w1, ge_w2, alpha_time);
+            mjd_val = 51544.5 + timediff(current_time_utc, epoch2time((double[]){2000,1,1,12,0,0})) / 86400.0;
+        }
+
+        // Calcular Fatores de Mapeamento VMF3 (mfh, mfw)
+        calculate_vmf3_mapping_factors_C(mjd_val, pos[0], pos[1], h_ell_station,
+                                         zd_rad, ah_interp, aw_interp, &mfh, &mfw);
+
+        // Aplicar Gradientes (apenas se TROPOPT_VMF3G estiver selecionado)
+        if (tropopt == TROPOPT_VMF3G) {
+            // gn_total_m, ge_total_m, az_rad_local, el_rad_local, cot_el
+            // já devem estar declaradas no topo do bloco.
+            gn_total_m = (gn_h_interp + gn_w_interp) / 1000.0;
+            ge_total_m = (ge_h_interp + ge_w_interp) / 1000.0;
+            if (el_rad_local > 0.1 * D2R) {
+                cot_el = cos(el_rad_local) / sin(el_rad_local);
+            }
+            gradient_contribution_m = (gn_total_m * cos(az_rad_local) + ge_total_m * sin(az_rad_local)) * cot_el;
+        }
+
+        // Calcular o atraso troposférico inclinado total
+        *trp = mfh * zhd_interp + mfw * zwd_interp + gradient_contribution_m;
+        *var = SQR(0.01);
+
+        trace(3, "VMF3 MODEL (pntpos): Calculated STD = %.4f m for sat el=%.1f deg\n", *trp, azel[1]*R2D);
+        return 1;
+    }
+    // --- FIM DO BLOCO ADICIONADO PARA VMF3/VMF3G ---
+
     /* SBAS (MOPS) troposphere model */
     if (tropopt==TROPOPT_SBAS) {
         *trp=sbstropcorr(time,pos,azel,var);
@@ -305,8 +404,7 @@ static int rescode(int iter, const obsd_t *obs, int n, const double *rs,
         
         /* reject duplicated observation data */
         if (i<n-1&&i<MAXOBS-1&&sat==obs[i+1].sat) {
-            char tstr[40];
-            trace(2,"duplicated obs data %s sat=%d\n",time2str(time,tstr,3),sat);
+            trace(2,"duplicated obs data %s sat=%d\n",time_str(time,3),sat);
             i++;
             continue;
         }
@@ -326,16 +424,15 @@ static int rescode(int iter, const obsd_t *obs, int n, const double *rs,
                 continue;
             }
             if ((freq=sat2freq(sat,obs[i].code[0],nav))==0.0) continue;
-            /* Convert from FREQL1 to freq */
             dion*=SQR(FREQL1/freq);
-            vion*=SQR(SQR(FREQL1/freq));
+            vion*=SQR(FREQL1/freq);
         
             /* tropospheric correction */
             if (!tropcorr(time,nav,pos,azel+i*2,opt->tropopt,&dtrp,&vtrp)) {
                 continue;
             }
         }
-        /* pseudorange with code bias correction */
+        /* psendorange with code bias correction */
         if ((P=prange(obs+i,nav,opt,&vmeas))==0.0) continue;
         
         /* pseudorange residual */
@@ -352,7 +449,7 @@ static int rescode(int iter, const obsd_t *obs, int n, const double *rs,
         else if (sys==SYS_GAL) {v[nv]-=x[5]; H[5+nv*NX]=1.0; mask[2]=1;}
         else if (sys==SYS_CMP) {v[nv]-=x[6]; H[6+nv*NX]=1.0; mask[3]=1;}
         else if (sys==SYS_IRN) {v[nv]-=x[7]; H[7+nv*NX]=1.0; mask[4]=1;}
-#ifdef QZSDT
+#if 0 /* enable QZS-GPS time offset estimation */
         else if (sys==SYS_QZS) {v[nv]-=x[8]; H[8+nv*NX]=1.0; mask[5]=1;}
 #endif
         else mask[0]=1;
@@ -360,11 +457,7 @@ static int rescode(int iter, const obsd_t *obs, int n, const double *rs,
         vsat[i]=1; resp[i]=v[nv]; (*ns)++;
         
         /* variance of pseudorange error */
-        var[nv]=vare[i]+vmeas+vion+vtrp;
-        if (ssat)
-            var[nv++]+=varerr(opt,&ssat[i],&obs[i],azel[1+i*2],sys);
-        else
-            var[nv++]+=varerr(opt,NULL,&obs[i],azel[1+i*2],sys);
+        var[nv++]=varerr(opt,&ssat[i],&obs[i],azel[1+i*2],sys)+vare[i]+vmeas+vion+vtrp;
         trace(4,"sat=%2d azel=%5.1f %4.1f res=%7.3f sig=%5.3f\n",obs[i].sat,
               azel[i*2]*R2D,azel[1+i*2]*R2D,resp[i],sqrt(var[nv-1]));
     }
@@ -418,7 +511,7 @@ static int estpos(const obsd_t *obs, int n, const double *rs, const double *dts,
     
     trace(3,"estpos  : n=%d\n",n);
     
-    v=mat(n+NX-3,1); H=mat(NX,n+NX-3); var=mat(n+NX-3,1);
+    v=mat(n+4,1); H=mat(NX,n+4); var=mat(n+4,1);
     
     for (i=0;i<3;i++) x[i]=sol->rr[i];
 
@@ -454,14 +547,11 @@ static int estpos(const obsd_t *obs, int n, const double *rs, const double *dts,
             sol->dtr[2]=x[5]/CLIGHT; /* GAL-GPS time offset (s) */
             sol->dtr[3]=x[6]/CLIGHT; /* BDS-GPS time offset (s) */
             sol->dtr[4]=x[7]/CLIGHT; /* IRN-GPS time offset (s) */
-#ifdef QZSDT
-            sol->dtr[5]=x[8]/CLIGHT; /* QZS-GPS time offset (s) */
-#endif
             for (j=0;j<6;j++) sol->rr[j]=j<3?x[j]:0.0;
-            for (j=0;j<3;j++) sol->qr[j]=(float)Q[j+j*NX];
-            sol->qr[3]=(float)Q[1];    /* cov xy */
-            sol->qr[4]=(float)Q[2+NX]; /* cov yz */
-            sol->qr[5]=(float)Q[2];    /* cov zx */
+            for (j=0;j<3;j++) sol->qr[j]=Q[j+j*NX]; // Remova o (float) cast
+            sol->qr[3]=Q[1];     /* cov xy */ // Remova o (float) cast
+            sol->qr[4]=Q[2+NX]; /* cov yz */ // Remova o (float) cast
+            sol->qr[5]=Q[2];     /* cov zx */ // Remova o (float) cast
             sol->ns=(uint8_t)ns;
             sol->age=sol->ratio=0.0;
             
@@ -478,7 +568,7 @@ static int estpos(const obsd_t *obs, int n, const double *rs, const double *dts,
     free(v); free(H); free(var);
     return 0;
 }
-/* RAIM FDE (failure detection and exclusion) -------------------------------*/
+/* RAIM FDE (failure detection and exclution) -------------------------------*/
 static int raim_fde(const obsd_t *obs, int n, const double *rs,
                     const double *dts, const double *vare, const int *svh,
                     const nav_t *nav, const prcopt_t *opt, const ssat_t *ssat, 
@@ -486,11 +576,11 @@ static int raim_fde(const obsd_t *obs, int n, const double *rs,
 {
     obsd_t *obs_e;
     sol_t sol_e={{0}};
-    char tstr[40],name[8],msg_e[128];
+    char tstr[32],name[16],msg_e[128];
     double *rs_e,*dts_e,*vare_e,*azel_e,*resp_e,rms_e,rms=100.0;
     int i,j,k,nvsat,stat=0,*svh_e,*vsat_e,sat=0;
     
-    trace(3,"raim_fde: %s n=%2d\n",time2str(obs[0].time,tstr,0),n);
+    trace(3,"raim_fde: %s n=%2d\n",time_str(obs[0].time,0),n);
     
     if (!(obs_e=(obsd_t *)malloc(sizeof(obsd_t)*n))) return 0;
     rs_e = mat(6,n); dts_e = mat(2,n); vare_e=mat(1,n); azel_e=zeros(2,n);
@@ -544,12 +634,10 @@ static int raim_fde(const obsd_t *obs, int n, const double *rs,
         vsat[i]=0;
         strcpy(msg,msg_e);
     }
-#ifdef TRACE
     if (stat) {
         time2str(obs[0].time,tstr,2); satno2id(sat,name);
         trace(2,"%s: %s excluded by raim\n",tstr+11,name);
     }
-#endif
     free(obs_e);
     free(rs_e ); free(dts_e ); free(vare_e); free(azel_e);
     free(svh_e); free(vsat_e); free(resp_e);
@@ -580,15 +668,15 @@ static int resdop(const obsd_t *obs, int n, const double *rs, const double *dts,
         a[0]=sin(azel[i*2])*cosel;
         a[1]=cos(azel[i*2])*cosel;
         a[2]=sin(azel[1+i*2]);
-        matmul("TN",3,1,3,E,a,e);
+        matmul("TN",3,1,3,1.0,E,a,0.0,e);
         
         /* satellite velocity relative to receiver in ECEF */
         for (j=0;j<3;j++) {
             vs[j]=rs[j+3+i*6]-x[j];
         }
         /* range rate with earth rotation correction */
-        rate=dot3(vs,e)+OMGE/CLIGHT*(rs[4+i*6]*rr[0]+rs[1+i*6]*x[0]-
-                                     rs[3+i*6]*rr[1]-rs[  i*6]*x[1]);
+        rate=dot(vs,e,3)+OMGE/CLIGHT*(rs[4+i*6]*rr[0]+rs[1+i*6]*x[0]-
+                                      rs[3+i*6]*rr[1]-rs[  i*6]*x[1]);
         
         /* Std of range rate error (m/s) */
         sig=(err<=0.0)?1.0:err*CLIGHT/freq;
@@ -661,8 +749,7 @@ extern int pntpos(const obsd_t *obs, int n, const nav_t *nav,
     double *rs,*dts,*var,*azel_,*resp;
     int i,stat,vsat[MAXOBS]={0},svh[MAXOBS];
     
-    char tstr[40];
-    trace(3,"pntpos  : tobs=%s n=%d\n",time2str(obs[0].time,tstr,3),n);
+    trace(3,"pntpos  : tobs=%s n=%d\n",time_str(obs[0].time,3),n);
     
     sol->stat=SOLQ_NONE;
     
@@ -689,7 +776,7 @@ extern int pntpos(const obsd_t *obs, int n, const nav_t *nav,
         opt_.ionoopt=IONOOPT_BRDC;
         opt_.tropopt=TROPOPT_SAAS;
     }
-    /* satellite positions, velocities and clocks */
+    /* satellite positons, velocities and clocks */
     satposs(sol->time,obs,n,nav,opt_.sateph,rs,dts,var,svh);
     
     /* estimate receiver position and time with pseudorange */
