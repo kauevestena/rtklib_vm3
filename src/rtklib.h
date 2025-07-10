@@ -894,8 +894,12 @@ typedef struct {        /* solution type */
 typedef struct {
     double lat_deg;
     double lon_deg;
-    double ah, aw, zhd, zwd;
-    double gn_h, ge_h, gn_w, ge_w;
+    double ah, aw;
+    double zhd, zwd;
+    double gn_h; // Gradiente Norte Hidrostático
+    double ge_h; // Gradiente Leste Hidrostático
+    double gn_w; // Gradiente Norte Úmido
+    double ge_w; // Gradiente Leste Úmido
 } vmf3_grid_point_t;
 
 typedef struct {
@@ -1129,6 +1133,7 @@ typedef struct {        /* file options type */
     char geexe  [MAXSTRPATH]; /* google earth exec file */
     char solstat[MAXSTRPATH]; /* solution statistics file */
     char trace  [MAXSTRPATH]; /* debug trace file */
+    char delays [MAXSTRPATH]; /* NOVO: delays output file */ // ADICIONE ESTA LINHA
 } filopt_t;
 
 typedef struct {        /* RINEX options type */
@@ -1389,6 +1394,8 @@ extern const char *formatstrs[];     /* stream format strings */
 extern opt_t sysopts[];              /* system options table */
 extern vmf3_cache_t vmf3_cache; // Declaração da variável global de cache VMF3
 extern const prcopt_t *g_prc_opt_for_solution_output;
+extern FILE *fp_delays;
+extern char g_delays_output_dir[1024];
 
 /* satellites, systems, codes functions --------------------------------------*/
 EXPORT int  satno   (int sys, int prn);

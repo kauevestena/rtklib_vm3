@@ -62,7 +62,8 @@
 *-----------------------------------------------------------------------------*/
 #include "vmf3_functions.h"
 #include "rtklib.h"
-
+FILE *fp_delays = NULL;
+extern char g_delays_output_dir[1024];
 #define SQR(x)      ((x)*(x))
 #define SQRT(x)     ((x)<=0.0||(x)!=(x)?0.0:sqrt(x))
 #define MAX(x,y)    ((x)>(y)?(x):(y))
@@ -197,6 +198,48 @@ extern int pppoutstat(rtk_t *rtk, char *buff)
 #endif
     return (int)(p-buff);
 }
+// Função para escrever os dados de atraso no arquivo delays.txt
+static void pppoutdelays(gtime_t time, const double *azel, double T,
+                         double ztd, double zhd, double zwd,
+                         double mfh, double mfw, double gn_total_m, double ge_total_m)
+{
+    // MANTENHA APENAS ESTA DECLARAÇÃO DE time_str_buf
+    char time_str_buf[64];
+    time2str(time, time_str_buf, 3);
+    trace(3, "DEBUG_DELAY_TIME: Writing for time %s\n", time_str_buf);
+
+    // A variável delays_filepath não é mais necessária se g_delays_output_dir
+    // já contém o caminho completo do arquivo de delays.
+    // char delays_filepath[1024]; // Esta linha deve estar comentada ou removida.
+    // sprintf(delays_filepath, "%s%s", g_delays_output_dir, "delays.txt"); // Esta linha deve estar comentada ou removida.
+
+    // Se o arquivo ainda não estiver aberto, abra-o no modo de anexar ("a")
+    if (fp_delays == NULL) {
+        // Use g_delays_output_dir DIRETAMENTE, pois ele conterá o caminho COMPLETO do arquivo
+        fp_delays = fopen(g_delays_output_dir, "a"); // MUDAR DE "w" PARA "a" AQUI!
+
+        if (fp_delays == NULL) {
+            trace(2, "Erro: Não foi possível abrir %s para escrita.\n", g_delays_output_dir);
+            return;
+        }
+        // ESCRITA DO CABEÇALHO (apenas uma vez, na primeira vez que o arquivo é aberto)
+        // Se o arquivo foi recém-criado (ou estava vazio), escreve o cabeçalho
+        // Você pode adicionar uma verificação de tamanho de arquivo aqui se quiser ser mais robusto
+        // (mas para seu caso, deletar manualmente é mais simples).
+        fseek(fp_delays, 0, SEEK_END); // Vai para o final do arquivo
+        if (ftell(fp_delays) == 0) { // Se o arquivo estiver vazio, escreve o cabeçalho
+            fprintf(fp_delays, "%-20s %-10.3f %-10.3f %-10.4f %-10.4f %-10.4f %-10.4f %-10.4f %-10.4f %-10.6f %-10.6f\n", // <--- Aumente para %.6f para GN(m) e GE(m)
+			         time_str_buf, azel[0] * R2D, azel[1] * R2D, T, ztd, zhd, zwd, mfh, mfw, gn_total_m, ge_total_m);
+        }
+        fseek(fp_delays, 0, SEEK_END); // Volta para o final para continuar adicionando dados
+    }
+    // ...
+    fprintf(fp_delays, "%-20s %-10.3f %-10.3f %-10.4f %-10.4f %-10.4f %-10.4f %-10.4f %-10.4f %-10.4f %-10.4f\n",
+            time_str_buf, azel[0] * R2D, azel[1] * R2D, T, ztd, zhd, zwd, mfh, mfw, gn_total_m, ge_total_m);
+    fflush(fp_delays); // Mantenha o fflush para garantir gravação imediata.
+}
+// ...
+fflush(fp_delays);
 /* exclude meas of eclipsing satellite (block IIA) ---------------------------*/
 static void testeclipse(const obsd_t *obs, int n, const nav_t *nav, double *rs)
 {
@@ -900,37 +943,41 @@ static int model_trop(gtime_t time, const double *pos, const double *azel,
     // INÍCIO DAS MODIFICAÇÕES PARA VMF3
     // =========================================================================
     if (opt->tropopt == TROPOPT_VMF3 || opt->tropopt == TROPOPT_VMF3G) {
-        gtime_t current_time_utc = gpst2utc(time); // Converte GPST para UTC
-        double lat_deg_station = pos[0] * R2D;     // Latitude da estação em graus
-        double lon_deg_station = pos[1] * R2D;     // Longitude da estação em graus
-        double h_ell_station = pos[2];             // Altura elipsoidal da estação em metros
+        gtime_t current_time_utc = gpst2utc(time); // Converte GPST para UTC 
+        double lat_deg_station = pos[0] * R2D;     // Latitude da estação em graus 
+        double lon_deg_station = pos[1] * R2D;     // Longitude da estação em graus 
+        double h_ell_station = pos[2];             // Altura elipsoidal da estação em metros 
 
         double mfh, mfw;
         double ah_interp, aw_interp, zhd_interp, zwd_interp;
         double gn_h_interp, ge_h_interp, gn_w_interp, ge_w_interp;
         double gradient_contribution_m = 0.0;
         double mjd_val;
-        double zd_rad = PI / 2.0 - azel[1]; // Distância zenital em radianos
+        double zd_rad = PI / 2.0 - azel[1]; // Distância zenital em radianos 
+		trace(3, "DEBUG_TROP: opt->tropopt = %d (VMF3=%d, VMF3G=%d)\n", opt->tropopt, TROPOPT_VMF3, TROPOPT_VMF3G);
 
-        // NOVO: Declare cot_el e az_rad aqui, e inicialize dtdx[1] e dtdx[2]
-        double cot_el = 0.0; // Declarar aqui para escopo mais amplo
-        double az_rad = azel[0]; // Declarar aqui para escopo mais amplo
+        // NOVO: Declare gn_total_m e ge_total_m aqui, no escopo mais amplo, e inicialize a 0.0
+        double gn_total_m = 0.0; // Inicialize para 0.0
+        double ge_total_m = 0.0; // Inicialize para 0.0
 
-        dtdx[1] = 0.0; // Inicializar para evitar "identificador não declarado"
-        dtdx[2] = 0.0; // Inicializar para evitar "identificador não declarado"
+        double cot_el = 0.0; // Declarar aqui para escopo mais amplo 
+        // double az_rad = azel[0]; // az_rad já é usado, mas esta declaração dupla é redundante e deve ser evitada. Use o azel[0] diretamente ou remova esta linha se já houver uma declaração válida.
+
+        dtdx[1] = 0.0; // Inicializar para evitar "identificador não declarado" 
+        dtdx[2] = 0.0; // Inicializar para evitar "identificador não declarado" 
 	
-        vmf3_grid_data_t *grid1 = NULL; // Grade VMF3 para o tempo T1
-        vmf3_grid_data_t *grid2 = NULL; // Grade VMF3 para o tempo T2
+        vmf3_grid_data_t *grid1 = NULL; // Grade VMF3 para o tempo T1 
+        vmf3_grid_data_t *grid2 = NULL; // Grade VMF3 para o tempo T2 
 
         // Obter as grades VMF3 mais próximas no tempo (T1 e T2) do cache
         // get_vmf3_data_for_time gerencia o carregamento de arquivos e o cache
         if (get_vmf3_data_for_time(current_time_utc, &grid1, &grid2) != 0) {
             trace(2, "VMF3: Falha ao obter dados da grade VMF3 para interpolação temporal.\n");
-            return 0; // Falha no modelo VMF3, pode usar um fallback ou retornar 0
+            return 0; // Falha no modelo VMF3, pode usar um fallback ou retornar 0 
         }
 
         // Se T1 e T2 são a mesma grade (ou seja, o tempo está dentro do bloco de 6h de uma grade)
-        if (fabs(timediff(grid1->time, grid2->time)) < 0.1) { // Menos de 0.1s de diferença
+        if (fabs(timediff(grid1->time, grid2->time)) < 0.1) { // Menos de 0.1s de diferença 
             // Interpolar coeficientes para a posição da estação usando a única grade
             if (interpolate_vmf3_grid_coeffs_C(grid1, lat_deg_station, lon_deg_station,
                                                &ah_interp, &aw_interp, &zhd_interp, &zwd_interp,
@@ -940,7 +987,7 @@ static int model_trop(gtime_t time, const double *pos, const double *azel,
             }
             // MJD para calculate_vmf3_mapping_factors_C (qualquer MJD do dia é suficiente aqui)
             mjd_val = 51544.5 + timediff(current_time_utc, epoch2time((double[]){2000,1,1,12,0,0})) / 86400.0;
-        } else { // Interpolação temporal entre duas grades VMF3 (T1 e T2)
+        } else { // Interpolação temporal entre duas grades VMF3 (T1 e T2) 
             double ah1, aw1, zhd1, zwd1, gn_h1, ge_h1, gn_w1, ge_w1;
             double ah2, aw2, zhd2, zwd2, gn_h2, ge_h2, gn_w2, ge_w2;
 
@@ -982,32 +1029,44 @@ static int model_trop(gtime_t time, const double *pos, const double *azel,
 
         // Aplicar Gradientes (apenas se TROPOPT_VMF3G estiver selecionado)
         if (opt->tropopt == TROPOPT_VMF3G) {
-            double gn_total_m = gn_h_interp / 1000.0 + gn_w_interp / 1000.0; // Converter mm para metros
-            double ge_total_m = ge_h_interp / 1000.0 + ge_w_interp / 1000.0;
+			trace(3, "DEBUG_TROP: Calculating gradients (TROPOPT_VMF3G active)\n");
+			trace(3, "DEBUG_TROP_INTERP: gn_h_interp=%.6f, ge_h_interp=%.6f, gn_w_interp=%.6f, ge_w_interp=%.6f\n",
+	              gn_h_interp, ge_h_interp, gn_w_interp, ge_w_interp);
+            gn_total_m = gn_h_interp / 1000.0 + gn_w_interp / 1000.0; // Converter mm para metros 
+            ge_total_m = ge_h_interp / 1000.0 + ge_w_interp / 1000.0;
 
-            double az_rad = azel[0]; // Azimute do satélite em radianos
-            double el_rad = azel[1]; // Elevação do satélite em radianos
+            // double az_rad = azel[0]; // Esta linha é redundante, azel[0] já é o azimute
+            double el_rad = azel[1]; // Elevação do satélite em radianos 
             double cot_el = 0.0;
 
-            if (el_rad > 0.1 * D2R) { // Evitar divisão por zero para elevações muito baixas (0.1 graus)
+            if (el_rad > 0.1 * D2R) { // Evitar divisão por zero para elevações muito baixas (0.1 graus) 
                 cot_el = cos(el_rad) / sin(el_rad);
             }
-            gradient_contribution_m = (gn_total_m * cos(az_rad) + ge_total_m * sin(az_rad)) * cot_el;
+            gradient_contribution_m = (gn_total_m * cos(azel[0]) + ge_total_m * sin(azel[0])) * cot_el; // Use azel[0] diretamente 
+			trace(3, "DEBUG_TROP: GN=%.6f, GE=%.6f\n", gn_total_m, ge_total_m);
+
         }
 
         // Calcular o atraso troposférico inclinado total
         *dtrp = mfh * zhd_interp + mfw * zwd_interp + gradient_contribution_m;
-        *var = SQR(0.01); // Variância do modelo VMF3
+        *var = SQR(0.01); // Variância do modelo VMF3 
 
         // IMPORTANTE: ZERAR AS DERIVADAS, POIS OS ESTADOS NÃO SERÃO ESTIMADOS
         dtdx[0] = 0.0;
         dtdx[1] = 0.0;
         dtdx[2] = 0.0;
 
+        double ztd_calculated = zhd_interp + zwd_interp;
+
+        // ATUALIZE A CHAMADA DA FUNÇÃO pppoutdelays
+        pppoutdelays(time, azel, *dtrp, ztd_calculated, zhd_interp, zwd_interp,
+                     mfh, mfw, gn_total_m, ge_total_m); // Passando gn_total_m e ge_total_m
+
         trace(3, "VMF3 MODEL: Calculated STD = %.4f m for sat el=%.1f deg\n", *dtrp, azel[1]*R2D);
-        return 1; // Sucesso
+        // trace(3, "VMF3 MODEL: Calculated STD = %.4f m for sat el=%.1f deg\n", *dtrp, azel[1]*R2D); // REMOVA ESTA LINHA DUPLICADA!
+        return 1; // Sucesso 
     }
-    return 0; // Se a opção tropopt não for reconhecida ou houver falha
+    return 0; // Se a opção tropopt não for reconhecida ou houver falha 
 }
 /* ionospheric model ---------------------------------------------------------*/
 static int model_iono(gtime_t time, const double *pos, const double *azel,
@@ -1364,4 +1423,8 @@ extern void pppos(rtk_t *rtk, const obsd_t *obs, int n, const nav_t *nav)
     }
     free(rs); free(dts); free(var); free(azel);
     free(xp); free(Pp); free(v); free(H); free(R);
+	if (fp_delays != NULL) {
+        fclose(fp_delays);
+        fp_delays = NULL; // Reseta o ponteiro
+    }
 }
