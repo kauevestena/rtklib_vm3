@@ -228,13 +228,13 @@ static void pppoutdelays(gtime_t time, const double *azel, double T,
         // (mas para seu caso, deletar manualmente é mais simples).
         fseek(fp_delays, 0, SEEK_END); // Vai para o final do arquivo
         if (ftell(fp_delays) == 0) { // Se o arquivo estiver vazio, escreve o cabeçalho
-            fprintf(fp_delays, "%-20s %-10.3f %-10.3f %-10.4f %-10.4f %-10.4f %-10.4f %-10.4f %-10.4f %-10.6f %-10.6f\n", // <--- Aumente para %.6f para GN(m) e GE(m)
+            fprintf(fp_delays, "%-20s %-15.9f %-15.9f %-15.9f %-15.9f %-15.9f %-15.9f %-15.9f %-15.9f %-15.9f %-15.9f\n",
 			         time_str_buf, azel[0] * R2D, azel[1] * R2D, T, ztd, zhd, zwd, mfh, mfw, gn_total_m, ge_total_m);
         }
         fseek(fp_delays, 0, SEEK_END); // Volta para o final para continuar adicionando dados
     }
     // ...
-    fprintf(fp_delays, "%-20s %-10.3f %-10.3f %-10.4f %-10.4f %-10.4f %-10.4f %-10.4f %-10.4f %-10.4f %-10.4f\n",
+    fprintf(fp_delays, "%-20s %-15.9f %-15.9f %-15.9f %-15.9f %-15.9f %-15.9f %-15.9f %-15.9f %-15.9f %-15.9f\n",
             time_str_buf, azel[0] * R2D, azel[1] * R2D, T, ztd, zhd, zwd, mfh, mfw, gn_total_m, ge_total_m);
     fflush(fp_delays); // Mantenha o fflush para garantir gravação imediata.
 }
