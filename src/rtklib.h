@@ -55,6 +55,17 @@ extern "C" {
 #define EXPORT
 #endif
 
+// THREADLOCAL macro definition
+#if defined(WIN32) && defined(_MSC_VER)
+    #define THREADLOCAL __declspec(thread)
+#elif __GNUC__
+    #define THREADLOCAL __thread
+#else
+    // For other compilers, THREADLOCAL might need to be defined or handled in makefiles.
+    // For now, a simple static might be a fallback, or it could be an error.
+    #define THREADLOCAL static // Or #error "THREADLOCAL not defined for this compiler"
+#endif
+
 /* constants -----------------------------------------------------------------*/
 #define VMF3_OP_DIR "C:\\DOUTORADO\\DEFESA\\DADOS PROCESSAMENTO\\DADOS\\VMF3_OP_2020" // <-- ADICIONE ESTA LINHA
 #define VER_RTKLIB  "demo5"             /* library version */
@@ -117,6 +128,16 @@ extern "C" {
 #define SYS_IRN     0x40                /* navigation system: IRNS */
 #define SYS_LEO     0x80                /* navigation system: LEO */
 #define SYS_ALL     0xFF                /* navigation system: all */
+
+// Add these RINEX system constants:
+#define RNX_SYS_GPS 0
+#define RNX_SYS_GLO 1
+#define RNX_SYS_GAL 2
+#define RNX_SYS_QZS 3
+#define RNX_SYS_SBS 4
+#define RNX_SYS_CMP 5
+#define RNX_SYS_IRN 6
+#define RNX_NUMSYS  7                   /* Number of RINEX systems */
 
 #define TSYS_GPS    0                   /* time system: GPS time */
 #define TSYS_UTC    1                   /* time system: UTC */
@@ -355,6 +376,10 @@ extern "C" {
 #define CODE_L4X    68                  /* obs code: G1al1OCd+p (GLO) */
 #define MAXCODE     68                  /* max number of obs code */
 
+// Add these:
+#define MAX_CODE_BIAS_FREQS 2           /* max number of frequencies for code biases in nav_t->cbias */
+#define MAX_CODE_BIASES     3           /* max number of code biases per frequency in nav_t->cbias */
+
 #define PMODE_SINGLE 0                  /* positioning mode: single */
 #define PMODE_DGPS   1                  /* positioning mode: DGPS/DGNSS */
 #define PMODE_KINEMA 2                  /* positioning mode: kinematic */
@@ -541,7 +566,10 @@ extern "C" {
 #define unlock(f)   pthread_mutex_unlock(f)
 #endif
 #define FILEPATHSEP '/'
-#endif
+#endif /* WIN32 */
+
+// Add this for compatibility if RTKLIB_FILEPATHSEP is used:
+#define RTKLIB_FILEPATHSEP FILEPATHSEP
 
 /* type definitions ----------------------------------------------------------*/
 
@@ -645,8 +673,10 @@ typedef struct {        /* GPS/QZS/GAL broadcast ephemeris type */
 typedef struct {        /* GLONASS broadcast ephemeris type */
     int sat;            /* satellite number */
     int iode;           /* IODE (0-6 bit of tb field) */
-    int frq;            /* satellite frequency number */
-    int svh,sva,age;    /* satellite health, accuracy, age of operation */
+    int frq;            /* satellite frequency number (-7 to +13) */
+    int svh;            /* satellite health (0:ok,1:unhealthy) */
+    int sva;            /* satellite accuracy (URA index equivalent) */
+    int age;            /* age of operation (days) */
     gtime_t toe;        /* epoch of epherides (gpst) */
     gtime_t tof;        /* message frame time (gpst) */
     double pos[3];      /* satellite position (ecef) (m) */
@@ -654,6 +684,8 @@ typedef struct {        /* GLONASS broadcast ephemeris type */
     double acc[3];      /* satellite acceleration (ecef) (m/s^2) */
     double taun,gamn;   /* SV clock bias (s)/relative freq bias */
     double dtaun;       /* delay between L1 and L2 (s) */
+    // Add this field for RINEX 3.05 compatibility:
+    int flags;          /* status flags (from RINEX 3.05) */
 } geph_t;
 
 typedef struct {        /* precise ephemeris type */
@@ -852,7 +884,13 @@ typedef struct {        /* navigation data type */
 
 typedef struct {        /* station parameter type */
     char name   [MAXANT]; /* marker name */
-    char marker [MAXANT]; /* marker number */
+    char marker [MAXANT]; /* marker number (used as marker name by some RINEX versions) */
+    // Add these fields:
+    char markerno [MAXANT]; /* marker number (specific field for RINEX) */
+    char markertype[MAXANT];/* marker type (specific field for RINEX) */
+    char observer [MAXANT]; /* observer name */
+    char agency   [MAXANT]; /* agency name */
+    // Existing fields:
     char antdes [MAXANT]; /* antenna descriptor */
     char antsno [MAXANT]; /* antenna serial number */
     char rectype[MAXANT]; /* receiver type descriptor */
@@ -1419,6 +1457,11 @@ EXPORT int    *imat (int n, int m);
 EXPORT double *zeros(int n, int m);
 EXPORT double *eye  (int n);
 EXPORT double dot (const double *a, const double *b, int n);
+
+/* dot product of 3d vectors -------------------------------------------------*/
+static inline double dot3(const double *a, const double *b) {
+    return dot(a,b,3);
+}
 EXPORT double norm(const double *a, int n);
 EXPORT void cross3(const double *a, const double *b, double *c);
 EXPORT int  normv3(const double *a, double *b);
