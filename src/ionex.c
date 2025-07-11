@@ -287,8 +287,18 @@ extern void readtec(const char *file, nav_t *nav, int opt)
     double dcb[MAXSAT]={0},rms[MAXSAT]={0};
     int i,n;
     char *efiles[MAXEXFILE];
+    char tsstr[64], testr[64]; // Assuming time2str needs buffer
     
-    trace(3,"readtec : file=%s\n",file);
+    trace(3,"readtec : file=%s\n",file); // Original trace, kept if still relevant
+                                        // The error log pointed to a different trace call at this line number
+                                        // C:\RTKLIB-demo5-demo5\RTKLIB-demo5-demo5 - VMF3\src\ionex.c(388,64): error C2095: 'trace': parâmetro real possui tipo 'void': parâmetro 3
+                                        // trace(3,"readionex: file=%s time=%s-%s\n",file,time2str(ts,tsstr,0), time2str(te,testr,0));
+                                        // This specific trace call is not visible in the provided src/ionex.c at line 388.
+                                        // The provided code at 388 is simply trace(3,"readtec : file=%s\n",file); which is fine.
+                                        // I will assume the error log was for a slightly different version or the line number was off.
+                                        // I will search for the problematic trace call: trace(3,"readionex: file=%s time=%s-%s" ...
+                                        // It seems this call is not present in the provided ionex.c.
+                                        // I will proceed to fix the other trace calls that ARE present and match the void parameter pattern.
     
     /* clear of tec grid data option */
     if (!opt) {
@@ -385,7 +395,8 @@ static int iondelay(gtime_t time, const tec_t *tec, const double *pos,
     int i;
     
     char tstr[40];
-    trace(3,"iondelay: time=%s pos=%.1f %.1f azel=%.1f %.1f\n",time2str(time,tstr,0),
+    time2str(time,tstr,0);
+    trace(3,"iondelay: time=%s pos=%.1f %.1f azel=%.1f %.1f\n",tstr,
           pos[0]*R2D,pos[1]*R2D,azel[0]*R2D,azel[1]*R2D);
     
     *delay=*var=0.0;
@@ -438,7 +449,8 @@ extern int iontec(gtime_t time, const nav_t *nav, const double *pos,
     int i,stat[2];
     
     char tstr[40];
-    trace(3,"iontec  : time=%s pos=%.1f %.1f azel=%.1f %.1f\n",time2str(time,tstr,0),
+    time2str(time,tstr,0);
+    trace(3,"iontec  : time=%s pos=%.1f %.1f azel=%.1f %.1f\n",tstr,
           pos[0]*R2D,pos[1]*R2D,azel[0]*R2D,azel[1]*R2D);
     
     if (azel[1]<MIN_EL||pos[2]<MIN_HGT) {
@@ -450,7 +462,8 @@ extern int iontec(gtime_t time, const nav_t *nav, const double *pos,
         if (timediff(nav->tec[i].time,time)>0.0) break;
     }
     if (i==0||i>=nav->nt) {
-        trace(2,"%s: tec grid out of period\n",time2str(time,tstr,0));
+        time2str(time,tstr,0);
+        trace(2,"%s: tec grid out of period\n",tstr);
         return 0;
     }
     if ((tt=timediff(nav->tec[i].time,nav->tec[i-1].time))==0.0) {
@@ -462,8 +475,9 @@ extern int iontec(gtime_t time, const nav_t *nav, const double *pos,
     stat[1]=iondelay(time,nav->tec+i  ,pos,azel,opt,dels+1,vars+1);
     
     if (!stat[0]&&!stat[1]) {
+        time2str(time,tstr,0);
         trace(2,"%s: tec grid out of area pos=%6.2f %7.2f azel=%6.1f %5.1f\n",
-              time2str(time,tstr,0),pos[0]*R2D,pos[1]*R2D,azel[0]*R2D,azel[1]*R2D);
+              tstr,pos[0]*R2D,pos[1]*R2D,azel[0]*R2D,azel[1]*R2D);
         return 0;
     }
     if (stat[0]&&stat[1]) { /* linear interpolation by time */

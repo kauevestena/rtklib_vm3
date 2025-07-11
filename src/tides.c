@@ -515,10 +515,10 @@ static double cubic_spline_eval(double y, int nn, const double *x, const double 
 // its Doodson number is given as input, and at the given time.
 static void tdfrph(const gtime_t tut, const int idood[6], double *freq, double *phase) {
   // Cache with the time as the key. This cache does not depend on idood[].
-  static THREADLOCAL gtime_t ctime = {0};
-  static THREADLOCAL double d[6], dd[6];
+  static THREADLOCAL gtime_t tls_epoch_time_cache = {0};
+  static THREADLOCAL double d_cache[6], dd_cache[6];
 
-  if (fabs(timediff(tut, ctime)) > 0.001) {
+  if (fabs(timediff(tut, tls_epoch_time_cache)) > 0.001) {
     // Julian centuries from J2000.0 (ET).
     double ep[6];
     time2epoch(tut, ep);
@@ -526,7 +526,7 @@ static void tdfrph(const gtime_t tut, const int idood[6], double *freq, double *
     gtime_t tgps = utc2gpst(tut);
     const double ep2000[] = {2000, 1, 1, 11, 59, 08.816};  // GPST of J2000.0
     double t = timediff(tgps, epoch2time(ep2000)) / 86400.0 / 36525.0;
-    ctime = tut;
+    tls_epoch_time_cache = tut;
     // IERS expressions for the Delaunay arguments, in degrees.
     double f1 =
         t * (t * (t * (t * -6.8e-8 + 1.43431e-5) + 0.0088553333) + 477198.8675605) + 134.96340251;
@@ -539,12 +539,12 @@ static void tdfrph(const gtime_t tut, const int idood[6], double *freq, double *
     double f5 =
         t * (t * (t * (t * -1.65e-8 + 2.1394e-6) + 0.0020756111) - 1934.1362619722) + 125.04455501;
     // Convert to Doodson (Darwin) variables.
-    d[0] = dayfr * 360 - f4;
-    d[1] = f3 + f5;
-    d[2] = d[1] - f4;
-    d[3] = d[1] - f1;
-    d[4] = -f5;
-    d[5] = d[2] - f2;
+    d_cache[0] = dayfr * 360 - f4;
+    d_cache[1] = f3 + f5;
+    d_cache[2] = d_cache[1] - f4;
+    d_cache[3] = d_cache[1] - f1;
+    d_cache[4] = -f5;
+    d_cache[5] = d_cache[2] - f2;
     // Find frequencies of Delauney variables (in cycles/day), and from these
     // the same for the Doodson arguments.
     double fd1 = t * 1.3e-9 + 0.0362916471;
@@ -552,20 +552,20 @@ static void tdfrph(const gtime_t tut, const int idood[6], double *freq, double *
     double fd3 = 0.0367481951 - t * 5e-10;
     double fd4 = 0.033863192 - t * 3e-10;
     double fd5 = t * 3e-10 - 1.470938e-4;
-    dd[0] = 1 - fd4;
-    dd[1] = fd3 + fd5;
-    dd[2] = dd[1] - fd4;
-    dd[3] = dd[1] - fd1;
-    dd[4] = -fd5;
-    dd[5] = dd[2] - fd2;
+    dd_cache[0] = 1 - fd4;
+    dd_cache[1] = fd3 + fd5;
+    dd_cache[2] = dd_cache[1] - fd4;
+    dd_cache[3] = dd_cache[1] - fd1;
+    dd_cache[4] = -fd5;
+    dd_cache[5] = dd_cache[2] - fd2;
   }
   // End of intialization (likely to be called only once)
   // Compute phase and frequency of the given tidal constituent.
   *freq = 0;
   *phase = 0;
   for (int i = 0; i < 6; i++) {
-    *freq += idood[i] * dd[i];
-    *phase += idood[i] * d[i];
+    *freq += idood[i] * dd_cache[i];
+    *phase += idood[i] * d_cache[i];
   }
   // Adjust phases so that they fall in the positive range 0 to 360.
   *phase = fmod(*phase, 360);
@@ -961,7 +961,8 @@ static void tide_pole(gtime_t tutc, const double *pos, const double *erpv, doubl
 extern void tidedisp(gtime_t tutc, const double *rr, int opt, const erp_t *erp,
                      const double odisp[2][11][3], double *dr) {
   char tstr[40];
-  trace(3, "tidedisp: tutc=%s\n", time2str(tutc, tstr, 0));
+  time2str(tutc, tstr, 0);
+  trace(3, "tidedisp: tutc=%s\n", tstr);
 
   double erpv[5] = {0};
   if (erp) geterp(erp, utc2gpst(tutc), erpv);
@@ -994,7 +995,7 @@ extern void tidedisp(gtime_t tutc, const double *rr, int opt, const erp_t *erp,
     denu[1] = -ds;
     denu[2] =  dz;
     double drt[3];
-    matmul("TN", 3, 1, 3, E, denu, drt);
+    matmul("TN", 3, 1, 3, 1.0, E, denu, 0.0, drt);
     for (int i = 0; i < 3; i++) dr[i] += drt[i];
     trace(5, "tidedisp otide: dr=%.3f %.3f %.3f\n", drt[0], drt[1], drt[2]);
   }
@@ -1002,7 +1003,7 @@ extern void tidedisp(gtime_t tutc, const double *rr, int opt, const erp_t *erp,
     double denu[3];
     tide_pole(tutc, pos, erpv, denu);
     double drt[3];
-    matmul("TN", 3, 1, 3, E, denu, drt);
+    matmul("TN", 3, 1, 3, 1.0, E, denu, 0.0, drt);
     for (int i = 0; i < 3; i++) dr[i] += drt[i];
     trace(5, "tidedisp spole: dr=%.3f %.3f %.3f\n", drt[0], drt[1], drt[2]);
   }
